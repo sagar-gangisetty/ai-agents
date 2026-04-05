@@ -89,4 +89,4 @@ with (
         agent_name=agent.name,
         agent_version=agent.version,
     )
-    print("Agent deleted")
+    print("Agent deleted successfully")
