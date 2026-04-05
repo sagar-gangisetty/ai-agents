@@ -3,41 +3,51 @@ import asyncio
 import json
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import FunctionTool
+
 from azure.identity import DefaultAzureCredential
-from azure.ai.projects.models import PromptAgentDefinition, FunctionTool
-from openai.types.responses.response_input_param import FunctionCallOutput, ResponseInputParam
+from azure.ai.projects import AIProjectClient
+from azure.ai.projects.models import PromptAgentDefinition, MCPTool
+from openai.types.responses.response_input_param import (
+    McpApprovalResponse,
+    ResponseInputParam,
+)
 
-# Add references
+from mcp import StdioServerParameters
+from mcp.client import ClientSession
 
 
-# Clear the console
-os.system('cls' if os.name=='nt' else 'clear')
+# Clear console
+os.system("cls" if os.name == "nt" else "clear")
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 project_endpoint = os.getenv("PROJECT_ENDPOINT")
 model_deployment = os.getenv("MODEL_DEPLOYMENT_NAME")
 
+
+# ---------------------------------------------------------
+# CONNECT TO MCP SERVER
+# ---------------------------------------------------------
 async def connect_to_server(exit_stack: AsyncExitStack):
     server_params = StdioServerParameters(
         command="python",
         args=["server.py"],
-        env=None
+        env=None,
     )
 
-    # Start the MCP server
+    # Start MCP session
+    session = await ClientSession.connect(server_params, exit_stack)
 
-
-    # Create an MCP client session
-    
-
-    # List available tools
-   
+    # Optional: list tools
+    tools = await session.list_tools()
+    print("MCP Tools available:", [t.name for t in tools.tools])
 
     return session
 
+
+# ---------------------------------------------------------
+# CHAT LOOP
+# ---------------------------------------------------------
 async def chat_loop(session):
 
     # Connect to the agents client
@@ -100,15 +110,17 @@ async def chat_loop(session):
         project_client.agents.delete_version(agent_name=agent.name, agent_version=agent.version)
         print("Deleted inventory agent.")
 
-
+# ---------------------------------------------------------
+# MAIN ENTRY
+# ---------------------------------------------------------
 async def main():
-    import sys
     exit_stack = AsyncExitStack()
     try:
         session = await connect_to_server(exit_stack)
         await chat_loop(session)
     finally:
         await exit_stack.aclose()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
