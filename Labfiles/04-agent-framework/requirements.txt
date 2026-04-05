@@ -1,0 +1,5 @@
+azure-ai-projects==2.0.0b4
+azure-identity
+python-dotenv
+agent-framework==1.0.0b260212
+opentelemetry-semantic-conventions-ai==0.4.13 --pre

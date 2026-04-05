@@ -27,6 +27,7 @@ package-lock.json
 uplevelenv/
 
 # Virtual environments
+Labenv/
 venv/
 env/
 ENV/
