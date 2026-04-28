@@ -6,41 +6,54 @@ from contextlib import AsyncExitStack
 
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import PromptAgentDefinition, MCPTool
-from openai.types.responses.response_input_param import (
-    McpApprovalResponse,
-    ResponseInputParam,
-)
+from azure.ai.projects.models import PromptAgentDefinition
+from openai.types.responses.response_input_param import ResponseInputParam
 
-from mcp import StdioServerParameters
-from mcp.client import ClientSession
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 
-# Clear console
+# ---------------------------------------------------------
+# ENV SETUP
+# ---------------------------------------------------------
+
 os.system("cls" if os.name == "nt" else "clear")
 
-# Load environment variables
 load_dotenv()
+
 project_endpoint = os.getenv("PROJECT_ENDPOINT")
 model_deployment = os.getenv("MODEL_DEPLOYMENT_NAME")
 
 
 # ---------------------------------------------------------
-# CONNECT TO MCP SERVER
+# MCP SERVER CONNECTION
 # ---------------------------------------------------------
-async def connect_to_server(exit_stack: AsyncExitStack):
+
+async def connect_to_server(exit_stack: AsyncExitStack) -> ClientSession:
     server_params = StdioServerParameters(
         command="python",
         args=["server.py"],
         env=None,
     )
 
-    # Start MCP session
-    session = await ClientSession.connect(server_params, exit_stack)
+    stdio_transport = await exit_stack.enter_async_context(
+        stdio_client(server_params)
+    )
 
-    # Optional: list tools
-    tools = await session.list_tools()
-    print("MCP Tools available:", [t.name for t in tools.tools])
+    stdio, write = stdio_transport
+
+    session = await exit_stack.enter_async_context(
+        ClientSession(stdio, write)
+    )
+
+    await session.initialize()
+
+    response = await session.list_tools()
+
+    print(
+        "MCP tools available:",
+        [tool.name for tool in response.tools],
+    )
 
     return session
 
@@ -48,78 +61,156 @@ async def connect_to_server(exit_stack: AsyncExitStack):
 # ---------------------------------------------------------
 # CHAT LOOP
 # ---------------------------------------------------------
-async def chat_loop(session):
 
-    # Connect to the agents client
+async def chat_loop(session: ClientSession):
+
     with (
         DefaultAzureCredential() as credential,
-        AIProjectClient(endpoint=project_endpoint, credential=credential) as project_client,
+        AIProjectClient(
+            endpoint=project_endpoint,
+            credential=credential,
+        ) as project_client,
         project_client.get_openai_client() as openai_client,
     ):
 
-        # Get the mcp tools available from the server
         response = await session.list_tools()
         tools = response.tools
 
-        # Build a function for each tool
+        functions_dict = {}
 
+        def make_tool_func(tool_name):
+            async def tool_func(**kwargs):
+                result = await session.call_tool(
+                    tool_name,
+                    kwargs,
+                )
+                return result
+            return tool_func
 
-        # Create FunctionTool definitions for the agent
-        
+        for tool in tools:
+            functions_dict[tool.name] = make_tool_func(
+                tool.name
+            )
 
-        # Create the agent
+        agent = project_client.agents.create_version(
+            agent_name="inventory-agent",
+            definition=PromptAgentDefinition(
+                model=model_deployment,
+                instructions="""
+You are an inventory assistant.
 
+Rules:
+- Recommend restock if inventory < 10 and weekly sales > 15
+- Recommend clearance if inventory > 20 and weekly sales < 5
+""",
+                tools=[],
+            ),
+        )
 
-        # Create a thread for the chat session
+        print("Agent created:", agent.name)
+
         conversation = openai_client.conversations.create()
 
-        # Create an input list to hold function call outputs to send back to the model
         input_list: ResponseInputParam = []
 
         while True:
-            user_input = input("Enter a prompt for the inventory agent. Use 'quit' to exit.\nUSER: ").strip()
+
+            user_input = input(
+                "\nUSER (type 'quit' to exit): "
+            ).strip()
+
             if user_input.lower() == "quit":
-                print("Exiting chat.")
                 break
 
-            # Send a prompt to the agent
             openai_client.conversations.items.create(
                 conversation_id=conversation.id,
-                items=[{"type": "message", "role": "user", "content": user_input}],
+                items=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": user_input,
+                    }
+                ],
             )
 
-            # Retrieve the agent's response, which may include function calls to the MCP server tools
             response = openai_client.responses.create(
                 conversation=conversation.id,
-                extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
                 input=input_list,
+                extra_body={
+                    "agent": {
+                        "name": agent.name,
+                        "type": "agent_reference",
+                    }
+                },
             )
 
-            # Check the run status for failures
             if response.status == "failed":
-                print(f"Response failed: {response.error}")
+                print("Agent failed:", response.error)
+                continue
 
-            # Process function calls
+            input_list = []
 
+            for item in response.output:
 
-            # Send function call outputs back to the model and retrieve a response
-           
-           
-        # Delete the agent when done
-        print("Cleaning up agents:")
-        project_client.agents.delete_version(agent_name=agent.name, agent_version=agent.version)
-        print("Deleted inventory agent.")
+                if item.type == "function_call":
+
+                    function_name = item.name
+                    args = json.loads(item.arguments)
+
+                    tool_func = functions_dict.get(
+                        function_name
+                    )
+
+                    if not tool_func:
+                        continue
+
+                    result = await tool_func(**args)
+
+                    input_list.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item.call_id,
+                            "output": result.content[0].text,
+                        }
+                    )
+
+            if input_list:
+
+                response = openai_client.responses.create(
+                    input=input_list,
+                    previous_response_id=response.id,
+                    extra_body={
+                        "agent": {
+                            "name": agent.name,
+                            "type": "agent_reference",
+                        }
+                    },
+                )
+
+            print("\nAGENT RESPONSE:")
+            print(response.output_text)
+
+        project_client.agents.delete_version(
+            agent_name=agent.name,
+            agent_version=agent.version,
+        )
+
+        print("Inventory agent deleted.")
+
 
 # ---------------------------------------------------------
-# MAIN ENTRY
+# MAIN
 # ---------------------------------------------------------
+
 async def main():
-    exit_stack = AsyncExitStack()
-    try:
-        session = await connect_to_server(exit_stack)
+
+    async with AsyncExitStack() as exit_stack:
+
+        session = await connect_to_server(
+            exit_stack
+        )
+
         await chat_loop(session)
-    finally:
-        await exit_stack.aclose()
 
 
 if __name__ == "__main__":

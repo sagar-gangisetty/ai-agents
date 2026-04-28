@@ -1,11 +1,11 @@
 # Add references
-
-
+from mcp.server.fastmcp import FastMcp
+from mcp.server.models import McpTool
 # Create an MCP server
-
+mcp = FastMcp() 
 
 # Add an inventory check mcp tool
-
+@mcp.tool()
 def get_inventory_levels() -> dict:
     """Returns current inventory for all products."""
     return {
@@ -22,7 +22,7 @@ def get_inventory_levels() -> dict:
     }
 
 # Add a weekly sales mcp tool
-
+@mcp.tool()
 def get_weekly_sales() -> dict:
     """Returns number of units sold last week."""
     return {
@@ -39,3 +39,4 @@ def get_weekly_sales() -> dict:
     }
 
 # Run the MCP server
+mcp.run()
