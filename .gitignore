@@ -74,3 +74,27 @@ Thumbs.db
 # Output files
 analysis_results.json
 output.txt
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+
+# Sensitive variable files
+#*.tfvars
+*.tfvars.json
+
+# Terraform plan output
+*.tfplan
+
+# Terraform lock file (optional: keep if you want reproducible builds)
+.terraform.lock.hcl
+
+# Terraform directory
+.terraform/
+
+# CLI configuration files
+terraform.rc
+.terraformrc
